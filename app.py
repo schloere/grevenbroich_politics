@@ -106,19 +106,27 @@ def main():
         ).properties(width=700, height=400)
         st.altair_chart(chart_role)
 
-    # Grafik 3: Heatmap Ausschuss x Rolle
-    st.subheader("Heatmap: Ausschuss x Rolle x Geschlecht")
-    if not df_filtered.empty:
-        df_heat = df_filtered.groupby(["OrganizationName", "Role", "Gender"]).size().reset_index(name='Count')
-        chart_heat = alt.Chart(df_heat).mark_rect().encode(
+# Heatmap Ausschuss x Rolle x Geschlecht
+st.subheader("Heatmap: Ausschuss x Rolle x Geschlecht")
+if not df_filtered.empty:
+    df_heat = df_filtered.groupby(["OrganizationName", "Role", "Gender"]).size().reset_index(name='Count')
+    
+    # Heatmap: X = Ausschuss, Y = Rolle, Color = Count, getrennt nach Geschlecht
+    charts = []
+    for gender in df_heat["Gender"].unique():
+        df_gender = df_heat[df_heat["Gender"] == gender]
+        chart = alt.Chart(df_gender).mark_rect().encode(
             x=alt.X("OrganizationName:N", title="Ausschuss"),
             y=alt.Y("Role:N", title="Rolle"),
             color=alt.Color("Count:Q", scale=alt.Scale(scheme="reds")),
-            tooltip=["OrganizationName", "Role", "Gender", "Count"]
-        ).facet(
-            column="Gender:N"
-        ).properties(width=150, height=400)
-        st.altair_chart(chart_heat)
+            tooltip=["OrganizationName", "Role", "Count"]
+        ).properties(
+            width=150, height=400, title=f"Geschlecht: {gender}"
+        )
+        charts.append(chart)
+    
+    # Alle Charts horizontal aneinanderreihen
+    st.altair_chart(alt.hconcat(*charts))
 
 if __name__ == "__main__":
     main()
