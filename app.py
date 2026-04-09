@@ -21,7 +21,7 @@ st.markdown("**11. Wahlperiode 2025-2030**")
 @st.cache_data(ttl=3600)
 def fetch_organizations():
     """Lade alle Organisationen (Ausschüsse) aus der API"""
-    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/organizations/?created_since=2025-09-23"
+    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/organizations/?modified_since=2025-10-23"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -33,7 +33,7 @@ def fetch_organizations():
 @st.cache_data(ttl=3600)
 def fetch_people():
     """Lade alle Personen aus der API"""
-    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people/?created_since=2025-09-23"
+    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people/?modified_since=2025-10-23"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
