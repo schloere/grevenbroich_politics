@@ -4,68 +4,87 @@ import pandas as pd
 import altair as alt
 from datetime import datetime
 
-# Zeitraum der 11. Wahlperiode definieren
-TERM_START = datetime(2025, 11, 1)
-TERM_END = datetime(2030, 10, 31)
-
 BASE_URL = "https://ris-oparl.itk-rheinland.de/Oparl/bodies/0013"
 
 @st.cache_data
 def fetch_people():
-    url = f"{BASE_URL}/people"
-    resp = requests.get(url)
+    resp = requests.get(f"{BASE_URL}/people")
     resp.raise_for_status()
     return resp.json().get("data", [])
 
 @st.cache_data
 def fetch_organizations():
-    url = f"{BASE_URL}/organizations"
-    resp = requests.get(url)
+    resp = requests.get(f"{BASE_URL}/organizations")
     resp.raise_for_status()
     return resp.json().get("data", [])
 
 @st.cache_data
 def fetch_memberships():
-    url = f"{BASE_URL}/memberships"
-    resp = requests.get(url)
+    resp = requests.get(f"{BASE_URL}/memberships")
     resp.raise_for_status()
     return resp.json().get("data", [])
 
-def in_term(date_str):
-    try:
-        d = datetime.fromisoformat(date_str[:-1])
-        return TERM_START <= d <= TERM_END
-    except:
-        return False
+@st.cache_data
+def fetch_legislative_terms():
+    resp = requests.get(f"{BASE_URL}/legislativeterms")
+    resp.raise_for_status()
+    return resp.json().get("data", [])
 
 def main():
-    st.title("Grevenbroich – 11. Wahlperiode Mitgliederanalyse (zeitbasiert)")
+    st.title("Grevenbroich – Mitgliederanalyse (neueste Wahlperiode)")
 
     people = fetch_people()
     orgs = fetch_organizations()
     memberships = fetch_memberships()
+    terms = fetch_legislative_terms()
 
-    # Mapping Person & Organisation
+    # Legislaturperioden: sortiert nach Startdatum
+    terms_sorted = sorted(
+        [t for t in terms if "startDate" in t],
+        key=lambda x: x["startDate"],
+        reverse=True
+    )
+    if not terms_sorted:
+        st.error("Keine Legislaturperioden gefunden.")
+        return
+
+    # Neuste Wahlperiode nehmen
+    latest_term = terms_sorted[0]
+    term_name = latest_term["name"]
+    term_start = datetime.fromisoformat(latest_term["startDate"])
+    term_end = datetime.fromisoformat(latest_term.get("endDate", datetime.now().isoformat()))
+
+    st.sidebar.markdown(f"**Analyse für:** {term_name} ({term_start.date()} – {term_end.date()})")
+
+    # Mapping IDs -> Namen/Gender
     person_map = {p["id"]:(p["name"], p.get("gender","Unbekannt")) for p in people}
-    org_map = {o["id"]: o["name"] for o in orgs}
+    org_map = {o["id"]: o.get("name","Unbekannt") for o in orgs}
 
+    # Memberships für die aktuelle Wahlperiode filtern
     rows = []
     for m in memberships:
         sd = m.get("startDate")
-        if sd and in_term(sd):
+        if not sd:
+            continue
+        try:
+            start_date = datetime.fromisoformat(sd[:10])
+        except:
+            continue
+        if term_start <= start_date <= term_end:
             pid = m.get("person")
             rows.append({
-                "Person": person_map.get(pid,("Unbekannt","Unbekannt"))[0],
-                "Gender": person_map.get(pid,("","Unbekannt"))[1],
+                "Person": person_map.get(pid, ("Unbekannt","Unbekannt"))[0],
+                "Gender": person_map.get(pid, ("","Unbekannt"))[1],
                 "Role": m.get("role","Unbekannt"),
                 "Organization": org_map.get(m.get("organization",""),"Unbekannt")
             })
 
     df = pd.DataFrame(rows)
     if df.empty:
-        st.warning("Für die 11. Wahlperiode (zeitbasiert) wurden keine Memberships gefunden.")
+        st.warning(f"Keine Memberships für {term_name} gefunden.")
         return
 
+    # Sidebar Filter
     st.sidebar.header("Filter")
     org_filter = st.sidebar.multiselect("Ausschuss / Organisation",
                                         options=df["Organization"].unique(),
