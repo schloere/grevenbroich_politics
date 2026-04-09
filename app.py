@@ -4,6 +4,7 @@ import pandas as pd
 import altair as alt
 
 BASE_URL = "https://ris-oparl.itk-rheinland.de/Oparl/bodies/0013"
+TARGET_TERM = "11. Wahlperiode 2025 - 2030"
 
 @st.cache_data
 def fetch_people():
@@ -15,23 +16,17 @@ def fetch_people():
 
     for person in data:
         memberships = person.get("membership", [])
-        if not memberships:
+        for m in memberships:
+            # Wir holen nur Memberships der aktuellen Legislaturperiode
+            org_id = m.get("organization", "")
+            # Die Legislaturperiode muss hier sauber aus der Organisation-ID extrahiert werden
             people_list.append({
                 "Name": person.get("name", "Unbekannt"),
                 "Gender": person.get("gender", "Unbekannt"),
-                "Role": "Keine Mitgliedschaft",
-                "Organization": "Keine Organisation",
-                "StartDate": None
+                "Role": m.get("role", "Unbekannt"),
+                "Organization": org_id,
+                "StartDate": m.get("startDate")
             })
-        else:
-            for m in memberships:
-                people_list.append({
-                    "Name": person.get("name", "Unbekannt"),
-                    "Gender": person.get("gender", "Unbekannt"),
-                    "Role": m.get("role", "Unbekannt"),
-                    "Organization": m.get("organization", "Unbekannt"),
-                    "StartDate": m.get("startDate")
-                })
     return pd.DataFrame(people_list)
 
 @st.cache_data
@@ -40,19 +35,24 @@ def fetch_organizations():
     response = requests.get(url)
     response.raise_for_status()
     data = response.json().get("data", [])
-    orgs = {o.get("id", "Unbekannt"): o.get("name", "Unbekannt") for o in data}
+    orgs = {o.get("id", "Unbekannt"): {"name": o.get("name", "Unbekannt"),
+                                      "legislativeTerm": o.get("legislativeTerm", "")} for o in data}
     return orgs
 
 def main():
-    st.title("Stadt Grevenbroich: Mitgliederanalyse nach Ausschuss und Rolle")
+    st.title("Stadt Grevenbroich – Mitgliederanalyse 11. Wahlperiode 2025-2030")
 
     df_people = fetch_people()
     orgs = fetch_organizations()
 
-    # Organisation-ID → Name
-    df_people["OrganizationName"] = df_people["Organization"].map(orgs).fillna("Unbekannt")
+    # Organisation-ID → Name und Legislaturperiode
+    df_people["OrganizationName"] = df_people["Organization"].map(lambda x: orgs.get(x, {}).get("name", "Unbekannt"))
+    df_people["LegislativeTermName"] = df_people["Organization"].map(lambda x: orgs.get(x, {}).get("legislativeTerm", "Unbekannt"))
 
-    # Sidebar: Filter & Anzeigeoptionen
+    # Filter nur 11. Wahlperiode
+    df_people = df_people[df_people["LegislativeTermName"] == TARGET_TERM]
+
+    # Sidebar: Filter & Diagrammauswahl
     st.sidebar.header("Filter")
     org_filter = st.sidebar.multiselect(
         "Ausschuss / Organisation",
