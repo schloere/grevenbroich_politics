@@ -58,7 +58,7 @@ def extract_paginated_data(api_response):
 def get_organization_members(org_id, people_data):
     """Ermittle alle Mitglieder einer Organisation mit Geschlecht"""
     members = {'male': 0, 'female': 0, 'unknown': 0}
-    today = datetime.strptime("2025-10-23", "%Y-%m-%d")
+    today = datetime.strptime("2025-12-23", "%Y-%m-%d")
     
     for person in people_data:
         if 'membership' in person:
@@ -105,7 +105,7 @@ if org_response and people_response:
     # Filtere nur Ausschüsse/Gremien der aktuellen Wahlperiode
     committees = []
     committee_stats = []
-    today = datetime.strptime("2025-10-23", "%Y-%m-%d")
+    today = datetime.strptime("2025-12-23", "%Y-%m-%d")
     
     for org in organizations:
         org_type = org.get('organizationType', '')
