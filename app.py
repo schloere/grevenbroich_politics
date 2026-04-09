@@ -52,7 +52,7 @@ def main():
     # Organisation-ID → Name
     df_people["OrganizationName"] = df_people["Organization"].map(orgs).fillna("Unbekannt")
 
-    # Sidebar-Filter
+    # Sidebar: Filter & Anzeigeoptionen
     st.sidebar.header("Filter")
     org_filter = st.sidebar.multiselect(
         "Ausschuss / Organisation",
@@ -70,6 +70,11 @@ def main():
         default=df_people["Gender"].unique()
     )
 
+    st.sidebar.header("Diagramme anzeigen")
+    show_org_chart = st.sidebar.checkbox("Ausschüsse", value=True)
+    show_role_chart = st.sidebar.checkbox("Rollen", value=True)
+    show_heatmap = st.sidebar.checkbox("Heatmap", value=True)
+
     # Filter anwenden
     df_filtered = df_people[
         df_people["OrganizationName"].isin(org_filter) &
@@ -81,52 +86,51 @@ def main():
     st.dataframe(df_filtered)
 
     # Grafik 1: Ausschüsse
-    st.subheader("Geschlechterverteilung pro Ausschuss")
-    if not df_filtered.empty:
-        df_org = df_filtered.groupby(["OrganizationName", "Gender"]).size().reset_index(name='Count')
-        chart_org = alt.Chart(df_org).mark_bar().encode(
-            x=alt.X("OrganizationName:N", title="Ausschuss"),
-            y=alt.Y("Count:Q", title="Anzahl"),
-            color=alt.Color("Gender:N", scale=alt.Scale(scheme="category10")),
-            tooltip=["OrganizationName", "Gender", "Count"]
-        ).properties(width=700, height=400)
-        st.altair_chart(chart_org)
-    else:
-        st.info("Keine Daten für die gewählten Filter.")
+    if show_org_chart:
+        st.subheader("Geschlechterverteilung pro Ausschuss")
+        if not df_filtered.empty:
+            df_org = df_filtered.groupby(["OrganizationName", "Gender"]).size().reset_index(name='Count')
+            chart_org = alt.Chart(df_org).mark_bar().encode(
+                x=alt.X("OrganizationName:N", title="Ausschuss"),
+                y=alt.Y("Count:Q", title="Anzahl"),
+                color=alt.Color("Gender:N", scale=alt.Scale(scheme="category10")),
+                tooltip=["OrganizationName", "Gender", "Count"]
+            ).properties(width=700, height=400)
+            st.altair_chart(chart_org)
+        else:
+            st.info("Keine Daten für die gewählten Filter.")
 
     # Grafik 2: Rollen
-    st.subheader("Geschlechterverteilung nach Rolle")
-    if not df_filtered.empty:
-        df_role = df_filtered.groupby(["Role", "Gender"]).size().reset_index(name='Count')
-        chart_role = alt.Chart(df_role).mark_bar().encode(
-            x=alt.X("Role:N", title="Rolle"),
-            y=alt.Y("Count:Q", title="Anzahl"),
-            color=alt.Color("Gender:N", scale=alt.Scale(scheme="category10")),
-            tooltip=["Role", "Gender", "Count"]
-        ).properties(width=700, height=400)
-        st.altair_chart(chart_role)
+    if show_role_chart:
+        st.subheader("Geschlechterverteilung nach Rolle")
+        if not df_filtered.empty:
+            df_role = df_filtered.groupby(["Role", "Gender"]).size().reset_index(name='Count')
+            chart_role = alt.Chart(df_role).mark_bar().encode(
+                x=alt.X("Role:N", title="Rolle"),
+                y=alt.Y("Count:Q", title="Anzahl"),
+                color=alt.Color("Gender:N", scale=alt.Scale(scheme="category10")),
+                tooltip=["Role", "Gender", "Count"]
+            ).properties(width=700, height=400)
+            st.altair_chart(chart_role)
 
-# Heatmap Ausschuss x Rolle x Geschlecht
-st.subheader("Heatmap: Ausschuss x Rolle x Geschlecht")
-if not df_filtered.empty:
-    df_heat = df_filtered.groupby(["OrganizationName", "Role", "Gender"]).size().reset_index(name='Count')
-    
-    # Heatmap: X = Ausschuss, Y = Rolle, Color = Count, getrennt nach Geschlecht
-    charts = []
-    for gender in df_heat["Gender"].unique():
-        df_gender = df_heat[df_heat["Gender"] == gender]
-        chart = alt.Chart(df_gender).mark_rect().encode(
-            x=alt.X("OrganizationName:N", title="Ausschuss"),
-            y=alt.Y("Role:N", title="Rolle"),
-            color=alt.Color("Count:Q", scale=alt.Scale(scheme="reds")),
-            tooltip=["OrganizationName", "Role", "Count"]
-        ).properties(
-            width=150, height=400, title=f"Geschlecht: {gender}"
-        )
-        charts.append(chart)
-    
-    # Alle Charts horizontal aneinanderreihen
-    st.altair_chart(alt.hconcat(*charts))
+    # Grafik 3: Heatmap Ausschuss x Rolle x Geschlecht
+    if show_heatmap:
+        st.subheader("Heatmap: Ausschuss x Rolle x Geschlecht")
+        if not df_filtered.empty:
+            df_heat = df_filtered.groupby(["OrganizationName", "Role", "Gender"]).size().reset_index(name='Count')
+            charts = []
+            for gender in df_heat["Gender"].unique():
+                df_gender = df_heat[df_heat["Gender"] == gender]
+                chart = alt.Chart(df_gender).mark_rect().encode(
+                    x=alt.X("OrganizationName:N", title="Ausschuss"),
+                    y=alt.Y("Role:N", title="Rolle"),
+                    color=alt.Color("Count:Q", scale=alt.Scale(scheme="reds")),
+                    tooltip=["OrganizationName", "Role", "Count"]
+                ).properties(
+                    width=150, height=400, title=f"Geschlecht: {gender}"
+                )
+                charts.append(chart)
+            st.altair_chart(alt.hconcat(*charts))
 
 if __name__ == "__main__":
     main()
