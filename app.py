@@ -2,13 +2,17 @@ import streamlit as st
 import requests
 import pandas as pd
 import altair as alt
+from datetime import datetime
+
+# Zeitraum der 11. Wahlperiode definieren
+TERM_START = datetime(2025, 11, 1)
+TERM_END = datetime(2030, 10, 31)
 
 BASE_URL = "https://ris-oparl.itk-rheinland.de/Oparl/bodies/0013"
-TARGET_TERM_NAME = "11. Wahlperiode 2025 - 2030"
 
 @st.cache_data
-def fetch_legislative_terms():
-    url = f"{BASE_URL}/legislativeterms"
+def fetch_people():
+    url = f"{BASE_URL}/people"
     resp = requests.get(url)
     resp.raise_for_status()
     return resp.json().get("data", [])
@@ -21,73 +25,58 @@ def fetch_organizations():
     return resp.json().get("data", [])
 
 @st.cache_data
-def fetch_people():
-    url = f"{BASE_URL}/people"
-    resp = requests.get(url)
-    resp.raise_for_status()
-    return resp.json().get("data", [])
-
-@st.cache_data
 def fetch_memberships():
     url = f"{BASE_URL}/memberships"
     resp = requests.get(url)
     resp.raise_for_status()
     return resp.json().get("data", [])
 
-def main():
-    st.title("Grevenbroich: Analyse Mitglieder 11. Wahlperiode 2025–2030")
+def in_term(date_str):
+    try:
+        d = datetime.fromisoformat(date_str[:-1])
+        return TERM_START <= d <= TERM_END
+    except:
+        return False
 
-    terms = fetch_legislative_terms()
-    orgs = fetch_organizations()
+def main():
+    st.title("Grevenbroich – 11. Wahlperiode Mitgliederanalyse (zeitbasiert)")
+
     people = fetch_people()
+    orgs = fetch_organizations()
     memberships = fetch_memberships()
 
-    # Legislaturperioden map (ID -> Name)
-    term_map = {t["id"]: t["name"] for t in terms}
-
-    # Organisationen map (ID -> Name)
+    # Mapping Person & Organisation
+    person_map = {p["id"]:(p["name"], p.get("gender","Unbekannt")) for p in people}
     org_map = {o["id"]: o["name"] for o in orgs}
 
-    # Personen map (ID -> Name, Gender)
-    person_map = {p["id"]: (p["name"], p.get("gender", "Unbekannt")) for p in people}
-
-    # Alle Memberships sauber aufbereiten
     rows = []
     for m in memberships:
-        term = term_map.get(m.get("legislativeTerm"), "")
-        if term == TARGET_TERM_NAME:
+        sd = m.get("startDate")
+        if sd and in_term(sd):
             pid = m.get("person")
             rows.append({
-                "Person": person_map.get(pid, ("Unbekannt", "Unbekannt"))[0],
-                "Gender": person_map.get(pid, ("", "Unbekannt"))[1],
-                "Role": m.get("role", "Unbekannt"),
-                "Organization": org_map.get(m.get("organization", ""), "Unbekannt"),
+                "Person": person_map.get(pid,("Unbekannt","Unbekannt"))[0],
+                "Gender": person_map.get(pid,("","Unbekannt"))[1],
+                "Role": m.get("role","Unbekannt"),
+                "Organization": org_map.get(m.get("organization",""),"Unbekannt")
             })
 
     df = pd.DataFrame(rows)
     if df.empty:
-        st.warning("Für die 11. Wahlperiode wurden keine Mitgliedschaften gefunden.")
+        st.warning("Für die 11. Wahlperiode (zeitbasiert) wurden keine Memberships gefunden.")
         return
 
-    # Sidebar: Filter
     st.sidebar.header("Filter")
-    org_filter = st.sidebar.multiselect(
-        "Ausschuss / Organisation",
-        options=df["Organization"].unique(),
-        default=df["Organization"].unique()
-    )
-    role_filter = st.sidebar.multiselect(
-        "Rolle",
-        options=df["Role"].unique(),
-        default=df["Role"].unique()
-    )
-    gender_filter = st.sidebar.multiselect(
-        "Geschlecht",
-        options=df["Gender"].unique(),
-        default=df["Gender"].unique()
-    )
+    org_filter = st.sidebar.multiselect("Ausschuss / Organisation",
+                                        options=df["Organization"].unique(),
+                                        default=df["Organization"].unique())
+    role_filter = st.sidebar.multiselect("Rolle",
+                                         options=df["Role"].unique(),
+                                         default=df["Role"].unique())
+    gender_filter = st.sidebar.multiselect("Geschlecht",
+                                           options=df["Gender"].unique(),
+                                           default=df["Gender"].unique())
 
-    st.sidebar.header("Diagramme anzeigen")
     show_org_chart = st.sidebar.checkbox("Ausschüsse", value=True)
     show_role_chart = st.sidebar.checkbox("Rollen", value=True)
     show_heatmap = st.sidebar.checkbox("Heatmap", value=True)
@@ -98,47 +87,39 @@ def main():
         df["Gender"].isin(gender_filter)
     ]
 
-    st.subheader("Rohdaten der Mitglieder")
+    st.subheader("Mitglieder Rohdaten")
     st.dataframe(df_filtered)
 
-    # Ausschüsse
     if show_org_chart:
         st.subheader("Geschlechterverteilung pro Ausschuss")
-        df_org = df_filtered.groupby(["Organization", "Gender"]).size().reset_index(name="Count")
-        chart_org = alt.Chart(df_org).mark_bar().encode(
-            x="Organization:N",
-            y="Count:Q",
-            color="Gender:N",
-            tooltip=["Organization","Gender","Count"]
-        ).properties(width=700, height=400)
-        st.altair_chart(chart_org)
+        df_org = df_filtered.groupby(["Organization","Gender"]).size().reset_index(name="Count")
+        c1 = alt.Chart(df_org).mark_bar().encode(
+            x="Organization:N", y="Count:Q",
+            color="Gender:N", tooltip=["Organization","Gender","Count"]
+        ).properties(width=700,height=350)
+        st.altair_chart(c1)
 
-    # Rollen
     if show_role_chart:
         st.subheader("Geschlechterverteilung nach Rolle")
         df_role = df_filtered.groupby(["Role","Gender"]).size().reset_index(name="Count")
-        chart_role = alt.Chart(df_role).mark_bar().encode(
-            x="Role:N",
-            y="Count:Q",
-            color="Gender:N",
-            tooltip=["Role","Gender","Count"]
-        ).properties(width=700, height=400)
-        st.altair_chart(chart_role)
+        c2 = alt.Chart(df_role).mark_bar().encode(
+            x="Role:N", y="Count:Q",
+            color="Gender:N", tooltip=["Role","Gender","Count"]
+        ).properties(width=700,height=350)
+        st.altair_chart(c2)
 
-    # Heatmap
     if show_heatmap:
-        st.subheader("Heatmap: Ausschuss x Rolle x Geschlecht")
+        st.subheader("Heatmap: Ausschuss × Rolle × Geschlecht")
         df_heat = df_filtered.groupby(["Organization","Role","Gender"]).size().reset_index(name="Count")
         charts = []
-        for gender in df_heat["Gender"].unique():
-            df_g = df_heat[df_heat["Gender"]==gender]
-            chart = alt.Chart(df_g).mark_rect().encode(
-                x="Organization:N",
-                y="Role:N",
+        for g in df_heat["Gender"].unique():
+            dfg = df_heat[df_heat["Gender"]==g]
+            c = alt.Chart(dfg).mark_rect().encode(
+                x="Organization:N", y="Role:N",
                 color=alt.Color("Count:Q", scale=alt.Scale(scheme="reds")),
                 tooltip=["Organization","Role","Count"]
-            ).properties(title=f"{gender}", width=150, height=400)
-            charts.append(chart)
+            ).properties(title=f"{g}",width=150,height=350)
+            charts.append(c)
         st.altair_chart(alt.hconcat(*charts))
 
 if __name__ == "__main__":
