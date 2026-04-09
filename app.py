@@ -17,8 +17,8 @@ def fetch_people():
         memberships = person.get("membership", [])
         if not memberships:
             people_list.append({
-                "Name": person.get("name"),
-                "Gender": person.get("gender") or "Unbekannt",
+                "Name": person.get("name", "Unbekannt"),
+                "Gender": person.get("gender", "Unbekannt"),
                 "Role": "Keine Mitgliedschaft",
                 "Organization": "Keine Organisation",
                 "StartDate": None,
@@ -26,36 +26,47 @@ def fetch_people():
             })
         else:
             for m in memberships:
-                # Extrahiere Legislaturperiode aus der Membership-URL
-                term_id = m.get("organization", "").split("/")[-1]
                 people_list.append({
-                    "Name": person.get("name"),
-                    "Gender": person.get("gender") or "Unbekannt",
-                    "Role": m.get("role") or "Unbekannt",
-                    "Organization": m.get("organization") or "Unbekannt",
+                    "Name": person.get("name", "Unbekannt"),
+                    "Gender": person.get("gender", "Unbekannt"),
+                    "Role": m.get("role", "Unbekannt"),
+                    "Organization": m.get("organization", "Unbekannt"),
                     "StartDate": m.get("startDate"),
-                    "LegislativeTerm": term_id
+                    "LegislativeTerm": None  # später ersetzen durch Organisation/Ausschuss
                 })
     return pd.DataFrame(people_list)
+
+@st.cache_data
+def fetch_organizations():
+    url = f"{BASE_URL}/organizations"
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json().get("data", [])
+    orgs = {}
+    for o in data:
+        orgs[o.get("id", "Unbekannt")] = o.get("name", "Unbekannt")
+    return orgs
 
 @st.cache_data
 def fetch_terms():
     url = f"{BASE_URL}/legislativeterms"
     response = requests.get(url)
     response.raise_for_status()
-    data = response.json()
+    data = response.json().get("data", [])
     terms = {}
     for t in data:
-        terms[t["id"].split("/")[-1]] = t["name"]
+        terms[t.get("id", "Unbekannt")] = t.get("name", "Unbekannt")
     return terms
 
 def main():
     st.title("Stadt Grevenbroich: Ausschüsse & Mitgliederanalyse")
 
     df_people = fetch_people()
+    orgs = fetch_organizations()
     terms = fetch_terms()
 
-    # Legislaturperiode-Namen hinzufügen
+    # Ausschussname ersetzen
+    df_people["OrganizationName"] = df_people["Organization"].map(orgs).fillna("Unbekannt")
     df_people["LegislativeTermName"] = df_people["LegislativeTerm"].map(terms).fillna("Unbekannt")
 
     st.sidebar.header("Filter")
@@ -75,7 +86,6 @@ def main():
         default=df_people["Gender"].unique()
     )
 
-    # Filter anwenden
     df_filtered = df_people[
         df_people["LegislativeTermName"].isin(term_filter) &
         df_people["Role"].isin(role_filter) &
@@ -85,15 +95,15 @@ def main():
     st.subheader("Rohdaten der Mitglieder")
     st.dataframe(df_filtered)
 
-    st.subheader("Geschlechterverteilung pro Rolle")
+    st.subheader("Geschlechterverteilung pro Ausschuss")
     if not df_filtered.empty:
-        gender_count = df_filtered.groupby(["Role", "Gender"]).size().reset_index(name='Count')
+        gender_count = df_filtered.groupby(["OrganizationName", "Gender"]).size().reset_index(name='Count')
         chart = alt.Chart(gender_count).mark_bar().encode(
-            x=alt.X("Role:N", title="Rolle"),
+            x=alt.X("OrganizationName:N", title="Ausschuss / Organisation"),
             y=alt.Y("Count:Q", title="Anzahl"),
             color=alt.Color("Gender:N", scale=alt.Scale(scheme="category10")),
-            tooltip=["Role", "Gender", "Count"]
-        ).properties(width=700, height=400)
+            tooltip=["OrganizationName", "Gender", "Count"]
+        ).properties(width=800, height=400)
         st.altair_chart(chart)
     else:
         st.info("Keine Daten für die gewählten Filter.")
