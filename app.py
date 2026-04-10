@@ -18,22 +18,34 @@ st.markdown("**11. Wahlperiode 2025-2030**")
 
 TARGET_DATE = datetime.strptime("2026-10-23", "%Y-%m-%d")
 
-# ---------------- API ----------------
+# ---------------- API MIT PAGINATION ----------------
+
+@st.cache_data(ttl=3600)
+def fetch_all_pages(url):
+    all_data = []
+    
+    while url:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        if isinstance(result, dict) and "data" in result:
+            all_data.extend(result["data"])
+            url = result.get("links", {}).get("next")
+        else:
+            break
+    
+    return all_data
 
 @st.cache_data(ttl=3600)
 def fetch_organizations():
     url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/organizations/"
-    return requests.get(url).json()
+    return fetch_all_pages(url)
 
 @st.cache_data(ttl=3600)
 def fetch_people():
     url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people/"
-    return requests.get(url).json()
-
-def extract_paginated_data(api_response):
-    if isinstance(api_response, dict) and 'data' in api_response:
-        return api_response['data']
-    return api_response or []
+    return fetch_all_pages(url)
 
 # ---------------- FILTER ----------------
 
@@ -59,16 +71,13 @@ def is_active_on_date(m):
 
 # ---------------- LOAD ----------------
 
-with st.spinner('Lade Daten...'):
-    org_response = fetch_organizations()
-    people_response = fetch_people()
+with st.spinner('Lade Daten vollständig (inkl. Pagination)...'):
+    organizations = fetch_organizations()
+    people = fetch_people()
 
-organizations = extract_paginated_data(org_response)
-people = extract_paginated_data(people_response)
+st.success(f"Geladen: {len(organizations)} Organisationen, {len(people)} Personen")
 
-st.success(f"Rohdaten: {len(organizations)} Organisationen, {len(people)} Personen")
-
-# ---------------- PERSONEN + MEMBERSHIPS FILTERN ----------------
+# ---------------- PERSONEN FILTERN ----------------
 
 filtered_people = []
 active_org_ids = set()
@@ -98,7 +107,7 @@ for person in people:
 
 st.success(f"Aktive Personen (Stichtag): {len(filtered_people)}")
 
-# ---------------- MITGLIEDER JE AUSSCHUSS ----------------
+# ---------------- MEMBERS ----------------
 
 def get_organization_members(org_id, people_data):
     members = {'male': 0, 'female': 0, 'unknown': 0}
@@ -127,11 +136,9 @@ for org in organizations:
     org_id = org.get("id")
     org_name = org.get("name", "Unbekannt")
     
-    # 👉 Nur Organisationen mit aktiven Memberships
     if org_id not in active_org_ids:
         continue
     
-    # 👉 Nur relevante Gremien
     if not any(k in org_name.lower() for k in ['ausschuss', 'rat', 'beirat', 'gremium', 'kommission']):
         continue
     
@@ -180,11 +187,12 @@ if committee_stats:
 else:
     st.warning("Keine Daten gefunden")
 
-# ---------------- DEBUG (OPTIONAL) ----------------
+# ---------------- DEBUG ----------------
 
 with st.expander("🔍 Debug"):
+    st.write("Organisationen gesamt:", len(organizations))
+    st.write("Personen gesamt:", len(people))
     st.write("Aktive Organisationen:", len(active_org_ids))
-    st.write("Beispiel IDs:", list(active_org_ids)[:10])
 
 # ---------------- FOOTER ----------------
 
