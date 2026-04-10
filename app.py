@@ -18,7 +18,7 @@ st.markdown("**11. Wahlperiode 2025-2030**")
 
 TARGET_DATE = datetime.strptime("2026-10-23", "%Y-%m-%d")
 
-# ---------------- API MIT PAGINATION ----------------
+# ---------------- API ----------------
 
 @st.cache_data(ttl=3600)
 def fetch_all_pages(url):
@@ -39,13 +39,11 @@ def fetch_all_pages(url):
 
 @st.cache_data(ttl=3600)
 def fetch_organizations():
-    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/organizations/"
-    return fetch_all_pages(url)
+    return fetch_all_pages("http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/organizations/")
 
 @st.cache_data(ttl=3600)
 def fetch_people():
-    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people/"
-    return fetch_all_pages(url)
+    return fetch_all_pages("http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people/")
 
 # ---------------- FILTER ----------------
 
@@ -71,20 +69,21 @@ def is_active_on_date(m):
 
 # ---------------- LOAD ----------------
 
-with st.spinner('Lade Daten vollständig (inkl. Pagination)...'):
+with st.spinner('Lade Daten vollständig...'):
     organizations = fetch_organizations()
     people = fetch_people()
 
 st.success(f"Geladen: {len(organizations)} Organisationen, {len(people)} Personen")
 
-# ---------------- PERSONEN FILTERN ----------------
+# ---------------- PERSONEN FILTERN (EINDEUTIG!) ----------------
 
 filtered_people = []
 active_org_ids = set()
 
 for person in people:
-    memberships = person.get("membership", [])
+    person_id = person.get("id")
     
+    memberships = person.get("membership", [])
     if not isinstance(memberships, list):
         memberships = [memberships]
     
@@ -105,16 +104,27 @@ for person in people:
         person["membership"] = valid_memberships
         filtered_people.append(person)
 
-st.success(f"Aktive Personen (Stichtag): {len(filtered_people)}")
+# 👉 globale eindeutige Personen
+unique_person_ids = set(p.get("id") for p in filtered_people)
+
+st.success(f"Eindeutige Personen (Stichtag): {len(unique_person_ids)}")
 
 # ---------------- MEMBERS ----------------
 
 def get_organization_members(org_id, people_data):
     members = {'male': 0, 'female': 0, 'unknown': 0}
+    seen_people = set()  # 👉 verhindert Doppelzählung
     
     for person in people_data:
+        person_id = person.get("id")
+        
         for m in person.get("membership", []):
             if m.get("organization") == org_id:
+                
+                if person_id in seen_people:
+                    break
+                
+                seen_people.add(person_id)
                 
                 gender = person.get('gender', 'unknown')
                 
@@ -174,25 +184,14 @@ if committee_stats:
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        total_members = df['Gesamt'].sum()
-        total_women = df['Frauen'].sum()
-        
         st.metric("Ausschüsse", len(df))
-        st.metric("Mitglieder", total_members)
-        st.metric("Frauenanteil", f"{(total_women / total_members * 100):.1f}%")
+        st.metric("Mitglieder (eindeutig)", len(unique_person_ids))
     
     st.subheader("📋 Übersicht")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 else:
     st.warning("Keine Daten gefunden")
-
-# ---------------- DEBUG ----------------
-
-with st.expander("🔍 Debug"):
-    st.write("Organisationen gesamt:", len(organizations))
-    st.write("Personen gesamt:", len(people))
-    st.write("Aktive Organisationen:", len(active_org_ids))
 
 # ---------------- FOOTER ----------------
 
