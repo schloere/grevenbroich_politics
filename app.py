@@ -29,7 +29,7 @@ def fetch_all_pages(url):
         response.raise_for_status()
         result = response.json()
         
-        if isinstance(result, dict) and "data" in result:
+        if "data" in result:
             all_data.extend(result["data"])
             url = result.get("links", {}).get("next")
         else:
@@ -44,6 +44,10 @@ def fetch_organizations():
 @st.cache_data(ttl=3600)
 def fetch_people():
     return fetch_all_pages("http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people/")
+
+@st.cache_data(ttl=3600)
+def fetch_memberships():
+    return fetch_all_pages("http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/memberships/")
 
 # ---------------- FILTER ----------------
 
@@ -69,72 +73,65 @@ def is_active_on_date(m):
 
 # ---------------- LOAD ----------------
 
-with st.spinner('Lade Daten vollständig...'):
+with st.spinner('Lade vollständige Daten (inkl. Memberships)...'):
     organizations = fetch_organizations()
     people = fetch_people()
+    memberships = fetch_memberships()
 
-st.success(f"Geladen: {len(organizations)} Organisationen, {len(people)} Personen")
+st.success(f"Geladen: {len(organizations)} Organisationen, {len(people)} Personen, {len(memberships)} Memberships")
 
-# ---------------- PERSONEN FILTERN (EINDEUTIG!) ----------------
+# ---------------- INDEXE ----------------
 
-filtered_people = []
+people_dict = {p["id"]: p for p in people}
+
+# ---------------- MEMBERSHIPS FILTERN ----------------
+
+valid_memberships = []
 active_org_ids = set()
+active_person_ids = set()
 
-for person in people:
-    person_id = person.get("id")
+for m in memberships:
+    if not isinstance(m, dict):
+        continue
     
-    memberships = person.get("membership", [])
-    if not isinstance(memberships, list):
-        memberships = [memberships]
+    if is_active_on_date(m):
+        person_id = m.get("person")
+        org_id = m.get("organization")
+        
+        if person_id and org_id:
+            valid_memberships.append(m)
+            active_person_ids.add(person_id)
+            active_org_ids.add(org_id)
+
+st.success(f"Aktive Memberships: {len(valid_memberships)}")
+st.success(f"Eindeutige Personen: {len(active_person_ids)}")
+
+# ---------------- MEMBERS PRO AUSSCHUSS ----------------
+
+def get_organization_members(org_id):
+    members = {'male': 0, 'female': 0, 'unknown': 0}
+    seen = set()
     
-    valid_memberships = []
-    
-    for m in memberships:
-        if not isinstance(m, dict):
+    for m in valid_memberships:
+        if m.get("organization") != org_id:
             continue
         
-        if is_active_on_date(m):
-            valid_memberships.append(m)
-            
-            org_id = m.get("organization")
-            if org_id:
-                active_org_ids.add(org_id)
-    
-    if valid_memberships:
-        person["membership"] = valid_memberships
-        filtered_people.append(person)
-
-# 👉 globale eindeutige Personen
-unique_person_ids = set(p.get("id") for p in filtered_people)
-
-st.success(f"Eindeutige Personen (Stichtag): {len(unique_person_ids)}")
-
-# ---------------- MEMBERS ----------------
-
-def get_organization_members(org_id, people_data):
-    members = {'male': 0, 'female': 0, 'unknown': 0}
-    seen_people = set()  # 👉 verhindert Doppelzählung
-    
-    for person in people_data:
-        person_id = person.get("id")
+        person_id = m.get("person")
         
-        for m in person.get("membership", []):
-            if m.get("organization") == org_id:
-                
-                if person_id in seen_people:
-                    break
-                
-                seen_people.add(person_id)
-                
-                gender = person.get('gender', 'unknown')
-                
-                if gender in ['male', 'männlich', 'm']:
-                    members['male'] += 1
-                elif gender in ['female', 'weiblich', 'f']:
-                    members['female'] += 1
-                else:
-                    members['unknown'] += 1
-                break
+        if person_id in seen:
+            continue
+        
+        seen.add(person_id)
+        
+        person = people_dict.get(person_id, {})
+        gender = person.get("gender", "unknown")
+        
+        if gender in ['male', 'männlich', 'm']:
+            members['male'] += 1
+        elif gender in ['female', 'weiblich', 'f']:
+            members['female'] += 1
+        else:
+            members['unknown'] += 1
     
     return members
 
@@ -144,20 +141,20 @@ committee_stats = []
 
 for org in organizations:
     org_id = org.get("id")
-    org_name = org.get("name", "Unbekannt")
+    name = org.get("name", "")
     
     if org_id not in active_org_ids:
         continue
     
-    if not any(k in org_name.lower() for k in ['ausschuss', 'rat', 'beirat', 'gremium', 'kommission']):
+    if not any(k in name.lower() for k in ['ausschuss', 'rat', 'beirat', 'gremium', 'kommission']):
         continue
     
-    members = get_organization_members(org_id, filtered_people)
+    members = get_organization_members(org_id)
     total = sum(members.values())
     
     if total > 0:
         committee_stats.append({
-            'Name': org_name,
+            'Name': name,
             'Männer': members['male'],
             'Frauen': members['female'],
             'Unbekannt': members['unknown'],
@@ -185,7 +182,7 @@ if committee_stats:
     
     with col2:
         st.metric("Ausschüsse", len(df))
-        st.metric("Mitglieder (eindeutig)", len(unique_person_ids))
+        st.metric("Mitglieder", len(active_person_ids))
     
     st.subheader("📋 Übersicht")
     st.dataframe(df, use_container_width=True, hide_index=True)
