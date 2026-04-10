@@ -4,7 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
-# Konfiguration
+# ---------------- CONFIG ----------------
+
 st.set_page_config(
     page_title="Ausschüsse Grevenbroich",
     page_icon="🏛️",
@@ -18,11 +19,6 @@ st.markdown("**11. Wahlperiode 2025-2030**")
 TARGET_DATE = datetime.strptime("2026-10-23", "%Y-%m-%d")
 
 # ---------------- API ----------------
-
-@st.cache_data(ttl=3600)
-def fetch_body():
-    url = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/"
-    return requests.get(url).json()
 
 @st.cache_data(ttl=3600)
 def fetch_organizations():
@@ -39,44 +35,29 @@ def extract_paginated_data(api_response):
         return api_response['data']
     return api_response or []
 
-# ---------------- WAHLPERIODE ----------------
-
-body = fetch_body()
-legislative_terms = body.get("legislativeTerm", [])
-
-TARGET_TERM_ID = None
-
-for term in legislative_terms:
-    if term.get("startDate", "").startswith("2025"):
-        TARGET_TERM_ID = term.get("id")
-        break
-
-st.info(f"Verwendete Wahlperiode: {TARGET_TERM_ID}")
-
 # ---------------- FILTER ----------------
 
-def is_valid_membership(m):
-    # 1. legislativeTerm (Primär)
-    term = m.get("legislativeTerm")
-    
-    if term:
-        if isinstance(term, list):
-            return TARGET_TERM_ID in term
-        return term == TARGET_TERM_ID
-    
-    # 2. Fallback Datum
+def is_active_on_date(m):
     start = m.get("startDate")
     end = m.get("endDate")
     
-    if start and datetime.fromisoformat(start[:10]) > TARGET_DATE:
-        return False
+    if start:
+        try:
+            if datetime.fromisoformat(start[:10]) > TARGET_DATE:
+                return False
+        except:
+            pass
     
-    if end and datetime.fromisoformat(end[:10]) < TARGET_DATE:
-        return False
+    if end:
+        try:
+            if datetime.fromisoformat(end[:10]) < TARGET_DATE:
+                return False
+        except:
+            pass
     
     return True
 
-# ---------------- DATEN LADEN ----------------
+# ---------------- LOAD ----------------
 
 with st.spinner('Lade Daten...'):
     org_response = fetch_organizations()
@@ -87,9 +68,10 @@ people = extract_paginated_data(people_response)
 
 st.success(f"Rohdaten: {len(organizations)} Organisationen, {len(people)} Personen")
 
-# ---------------- PERSONEN FILTERN ----------------
+# ---------------- PERSONEN + MEMBERSHIPS FILTERN ----------------
 
 filtered_people = []
+active_org_ids = set()
 
 for person in people:
     memberships = person.get("membership", [])
@@ -97,16 +79,24 @@ for person in people:
     if not isinstance(memberships, list):
         memberships = [memberships]
     
-    valid_memberships = [
-        m for m in memberships
-        if isinstance(m, dict) and is_valid_membership(m)
-    ]
+    valid_memberships = []
+    
+    for m in memberships:
+        if not isinstance(m, dict):
+            continue
+        
+        if is_active_on_date(m):
+            valid_memberships.append(m)
+            
+            org_id = m.get("organization")
+            if org_id:
+                active_org_ids.add(org_id)
     
     if valid_memberships:
         person["membership"] = valid_memberships
         filtered_people.append(person)
 
-st.success(f"Gefilterte Personen (Wahlperiode): {len(filtered_people)}")
+st.success(f"Aktive Personen (Stichtag): {len(filtered_people)}")
 
 # ---------------- MITGLIEDER JE AUSSCHUSS ----------------
 
@@ -114,8 +104,8 @@ def get_organization_members(org_id, people_data):
     members = {'male': 0, 'female': 0, 'unknown': 0}
     
     for person in people_data:
-        for membership in person.get("membership", []):
-            if membership.get("organization") == org_id:
+        for m in person.get("membership", []):
+            if m.get("organization") == org_id:
                 
                 gender = person.get('gender', 'unknown')
                 
@@ -134,17 +124,20 @@ def get_organization_members(org_id, people_data):
 committee_stats = []
 
 for org in organizations:
-    org_name = org.get('name', 'Unbekannt')
-    org_id = org.get('id', '')
+    org_id = org.get("id")
+    org_name = org.get("name", "Unbekannt")
     
-    # Nur relevante Gremien
-    if not any(k in org_name.lower() for k in ['ausschuss', 'rat', 'gremium', 'beirat', 'kommission']):
+    # 👉 Nur Organisationen mit aktiven Memberships
+    if org_id not in active_org_ids:
+        continue
+    
+    # 👉 Nur relevante Gremien
+    if not any(k in org_name.lower() for k in ['ausschuss', 'rat', 'beirat', 'gremium', 'kommission']):
         continue
     
     members = get_organization_members(org_id, filtered_people)
     total = sum(members.values())
     
-    # 👉 nur Gremien mit Mitgliedern
     if total > 0:
         committee_stats.append({
             'Name': org_name,
@@ -164,7 +157,6 @@ if committee_stats:
     
     with col1:
         fig = go.Figure()
-        
         fig.add_bar(name='Männer', y=df['Name'], x=df['Männer'], orientation='h')
         fig.add_bar(name='Frauen', y=df['Name'], x=df['Frauen'], orientation='h')
         
@@ -187,6 +179,12 @@ if committee_stats:
 
 else:
     st.warning("Keine Daten gefunden")
+
+# ---------------- DEBUG (OPTIONAL) ----------------
+
+with st.expander("🔍 Debug"):
+    st.write("Aktive Organisationen:", len(active_org_ids))
+    st.write("Beispiel IDs:", list(active_org_ids)[:10])
 
 # ---------------- FOOTER ----------------
 
