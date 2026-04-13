@@ -37,12 +37,11 @@ def fetch_all_pages(url):
 @st.cache_data(ttl=3600)
 def load_data():
     base = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/"
-    
-    organizations = fetch_all_pages(base + "organizations/")
-    people = fetch_all_pages(base + "people/")
-    memberships = fetch_all_pages(base + "memberships/")
-    
-    return organizations, people, memberships
+    return (
+        fetch_all_pages(base + "organizations/"),
+        fetch_all_pages(base + "people/"),
+        fetch_all_pages(base + "memberships/")
+    )
 
 with st.spinner("Lade Daten..."):
     organizations, people, memberships = load_data()
@@ -60,19 +59,13 @@ def is_active(m):
     start = m.get("startDate")
     end = m.get("endDate")
     
-    if start:
-        try:
-            if datetime.fromisoformat(start[:10]) > TARGET_DATE:
-                return False
-        except:
-            pass
-    
-    if end:
-        try:
-            if datetime.fromisoformat(end[:10]) < TARGET_DATE:
-                return False
-        except:
-            pass
+    try:
+        if start and datetime.fromisoformat(start[:10]) > TARGET_DATE:
+            return False
+        if end and datetime.fromisoformat(end[:10]) < TARGET_DATE:
+            return False
+    except:
+        pass
     
     return True
 
@@ -94,9 +87,7 @@ for m in memberships:
     if m.get("person") and m.get("organization"):
         valid_memberships.append(m)
 
-st.success(f"Aktive Mitglieder-Memberships: {len(valid_memberships)}")
-
-# ---------------- PERSONEN ----------------
+st.success(f"Aktive Memberships: {len(valid_memberships)}")
 
 active_person_ids = set(m["person"] for m in valid_memberships)
 st.metric("Mitglieder gesamt", len(active_person_ids))
@@ -118,10 +109,26 @@ def infer_gender(person):
     
     return "unknown"
 
-# ---------------- AUSSCHÜSSE ----------------
+# ---------------- AUSSCHUSS FILTER ----------------
 
 def is_committee(org):
-    return org.get("classification") == "committee"
+    name = org.get("name", "").lower()
+    
+    keywords = [
+        "ausschuss",
+        "rat",
+        "beirat",
+        "kommission",
+        "gremium"
+    ]
+    
+    if any(k in name for k in keywords):
+        return True
+    
+    if org.get("classification") == "committee":
+        return True
+    
+    return False
 
 # ---------------- MEMBERS PRO AUSSCHUSS ----------------
 
@@ -173,7 +180,7 @@ def get_committee_distribution(org_id):
     
     return dist
 
-# ---------------- AUSSCHUSS LISTE ----------------
+# ---------------- AUSSCHÜSSE ----------------
 
 committee_stats = []
 
@@ -196,9 +203,14 @@ for org in organizations:
         "Frauenanteil %": round(members["female"] / total * 100, 1)
     })
 
+# 👉 Crash-Schutz
+if not committee_stats:
+    st.error("Keine Ausschüsse gefunden – Filter prüfen")
+    st.stop()
+
 df = pd.DataFrame(committee_stats).sort_values("Gesamt", ascending=False)
 
-# ---------------- GESAMT MACHT ----------------
+# ---------------- MACHTVERTEILUNG ----------------
 
 power = {}
 
@@ -217,8 +229,8 @@ st.subheader("🏛️ Machtverhältnisse")
 
 fig_power = go.Figure()
 fig_power.add_bar(x=df_power["Fraktion"], y=df_power["Sitze"])
-
 fig_power.update_layout(height=350)
+
 st.plotly_chart(fig_power, use_container_width=True)
 
 # ---------------- AUSSCHÜSSE ----------------
@@ -233,7 +245,11 @@ fig.add_bar(name="Frauen", y=df["Name"], x=df["Frauen"], orientation="h")
 if df["Unbekannt"].sum() > 0:
     fig.add_bar(name="Unbekannt", y=df["Name"], x=df["Unbekannt"], orientation="h")
 
-fig.update_layout(barmode="stack", height=500)
+fig.update_layout(
+    barmode="stack",
+    height=500,
+    margin=dict(l=0, r=0)
+)
 
 st.plotly_chart(fig, use_container_width=True)
 
