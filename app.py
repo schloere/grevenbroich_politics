@@ -91,31 +91,23 @@ def normalize_gender(gender):
 
 def is_in_current_period(membership):
     """
-    Prüft ob Mitgliedschaft in der aktuellen Wahlperiode ist.
-    Filtert Mitgliedschaften aus, die vor dem 01.02.2026 beendet wurden.
+    Prüft ob Mitgliedschaft aktuell aktiv ist (nach dem 31.01.2026).
+    Eine Mitgliedschaft ist aktiv wenn:
+    1. Sie kein endDate hat (=aktuell aktiv)
+    2. Sie ein endDate nach dem 31.01.2026 hat (=noch nicht beendet)
     """
-    start_date_str = membership.get('startDate')
     end_date_str = membership.get('endDate')
     
-    if not start_date_str:
-        return False
+    # Kein Enddatum = Mitgliedschaft ist aktiv
+    if not end_date_str:
+        return True
     
     try:
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
-        
-        # Wenn kein Enddatum angegeben, ist die Mitgliedschaft aktiv
-        if not end_date_str:
-            # Mitgliedschaft muss nach oder während der Wahlperiode begonnen haben
-            return start_date >= WAHLPERIODE_START
-        
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
         
-        # Mitgliedschaft wird ausgefiltert, wenn sie vor dem Cutoff-Datum endet
-        if end_date <= CUTOFF_DATE:
-            return False
-        
-        # Mitgliedschaft muss die Wahlperiode überlappen
-        return start_date >= WAHLPERIODE_START or end_date >= WAHLPERIODE_START
+        # Mitgliedschaft ist nur aktiv, wenn sie nach dem Cutoff-Datum endet
+        # (d.h. endDate muss nach dem 31.01.2026 sein)
+        return end_date > CUTOFF_DATE
     except:
         return False
 
@@ -129,7 +121,7 @@ def main():
         **Gefilterte Daten:**
         - Wahlperiode beginnt: {WAHLPERIODE_START.strftime('%d.%m.%Y')}
         - Ausgeschlossen: Mitgliedschaften mit Enddatum bis einschließlich {CUTOFF_DATE.strftime('%d.%m.%Y')}
-        - Angezeigt: Nur aktive Mitgliedschaften ab {(CUTOFF_DATE + pd.Timedelta(days=1)).strftime('%d.%m.%Y')}
+        - Angezeigt: Alle aktiven Mitgliedschaften (ohne Enddatum oder mit Enddatum nach {CUTOFF_DATE.strftime('%d.%m.%Y')})
         """)
     
     with st.spinner("Lade Daten von der OParl-API..."):
@@ -169,7 +161,7 @@ def main():
             if not membership:
                 continue
             
-            # Prüfen ob in aktueller Wahlperiode (mit neuem Filter)
+            # Prüfen ob Mitgliedschaft aktuell aktiv ist
             if not is_in_current_period(membership):
                 continue
             
@@ -405,7 +397,7 @@ def main():
     
     # Footer
     st.markdown("---")
-    st.caption(f"Datenquelle: OParl-API Grevenbroich | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')} | Aktive Mitgliedschaften ab {(CUTOFF_DATE + pd.Timedelta(days=1)).strftime('%d.%m.%Y')}")
+    st.caption(f"Datenquelle: OParl-API Grevenbroich | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')} | Aktive Mitgliedschaften (kein Enddatum oder Enddatum nach {CUTOFF_DATE.strftime('%d.%m.%Y')})")
 
 if __name__ == "__main__":
     main()
