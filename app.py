@@ -16,7 +16,7 @@ st.title("🏛️ Ausschüsse der Stadt Grevenbroich")
 st.markdown("### Übersicht der Ausschüsse und Geschlechterverteilung")
 st.markdown("**11. Wahlperiode 2025-2030**")
 
-TARGET_DATE = datetime.strptime("2026-10-23", "%Y-%m-%d")
+TARGET_DATE = datetime.strptime("2025-10-23", "%Y-%m-%d")
 
 # ---------------- API ----------------
 
