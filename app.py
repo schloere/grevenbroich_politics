@@ -41,6 +41,8 @@ ORG_URL = f"{BASE_URL}/organizations"
 
 # Wahlperiode definieren
 WAHLPERIODE_START = datetime(2025, 11, 1)
+# Stichtag: Mitgliedschaften die vor diesem Datum enden, werden ausgefiltert
+CUTOFF_DATE = datetime(2026, 1, 31)
 
 @st.cache_data(ttl=3600)
 def fetch_all_pages(url):
@@ -88,7 +90,10 @@ def normalize_gender(gender):
         return "Divers"
 
 def is_in_current_period(membership):
-    """Prüft ob Mitgliedschaft in der aktuellen Wahlperiode ist"""
+    """
+    Prüft ob Mitgliedschaft in der aktuellen Wahlperiode ist.
+    Filtert Mitgliedschaften aus, die vor dem 01.02.2026 beendet wurden.
+    """
     start_date_str = membership.get('startDate')
     end_date_str = membership.get('endDate')
     
@@ -100,11 +105,16 @@ def is_in_current_period(membership):
         
         # Wenn kein Enddatum angegeben, ist die Mitgliedschaft aktiv
         if not end_date_str:
-            return start_date <= WAHLPERIODE_START or start_date >= WAHLPERIODE_START
+            # Mitgliedschaft muss nach oder während der Wahlperiode begonnen haben
+            return start_date >= WAHLPERIODE_START
         
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
         
-        # Prüfen ob Mitgliedschaft die Wahlperiode überlappt
+        # Mitgliedschaft wird ausgefiltert, wenn sie vor dem Cutoff-Datum endet
+        if end_date <= CUTOFF_DATE:
+            return False
+        
+        # Mitgliedschaft muss die Wahlperiode überlappen
         return start_date >= WAHLPERIODE_START or end_date >= WAHLPERIODE_START
     except:
         return False
@@ -112,6 +122,15 @@ def is_in_current_period(membership):
 def main():
     st.title("🏛️ Ratsinformationssystem Grevenbroich")
     st.subheader("Wahlperiode 2025-2030")
+    
+    # Info-Box zum Filter
+    with st.expander("ℹ️ Filter-Information"):
+        st.info(f"""
+        **Gefilterte Daten:**
+        - Wahlperiode beginnt: {WAHLPERIODE_START.strftime('%d.%m.%Y')}
+        - Ausgeschlossen: Mitgliedschaften mit Enddatum bis einschließlich {CUTOFF_DATE.strftime('%d.%m.%Y')}
+        - Angezeigt: Nur aktive Mitgliedschaften ab {(CUTOFF_DATE + pd.Timedelta(days=1)).strftime('%d.%m.%Y')}
+        """)
     
     with st.spinner("Lade Daten von der OParl-API..."):
         # Daten laden
@@ -129,10 +148,12 @@ def main():
     people_list = []
     gender_count = {"Männlich": 0, "Weiblich": 0, "Divers": 0}
     org_gender_count = defaultdict(lambda: {"Männlich": 0, "Weiblich": 0, "Divers": 0})
+    person_counted = set()  # Um Personen nur einmal zu zählen
     
     for person in people_data:
         gender = normalize_gender(person.get('gender', ''))
         person_name = person.get('name', 'Unbekannt')
+        person_id = person.get('id', '')
         
         # Mitgliedschaften verarbeiten
         memberships = person.get('membership', [])
@@ -148,7 +169,7 @@ def main():
             if not membership:
                 continue
             
-            # Prüfen ob in aktueller Wahlperiode
+            # Prüfen ob in aktueller Wahlperiode (mit neuem Filter)
             if not is_in_current_period(membership):
                 continue
             
@@ -163,20 +184,28 @@ def main():
             role = membership.get('role', '-')
             voting_right = "Ja" if membership.get('votingRight', False) else "Nein"
             
+            # Start- und Enddatum für Anzeige
+            start_date = membership.get('startDate', '-')
+            end_date = membership.get('endDate', 'Aktiv')
+            
             people_list.append({
                 'Name': person_name,
                 'Geschlecht': gender,
                 'Ausschuss': org_name,
                 'Rolle': role,
-                'Stimmrecht': voting_right
+                'Stimmrecht': voting_right,
+                'Von': start_date,
+                'Bis': end_date
             })
             
             # Statistik aktualisieren
             org_gender_count[org_name][gender] += 1
         
         # Gesamtstatistik nur wenn Person in aktueller Periode aktiv
-        if has_current_membership:
+        # und noch nicht gezählt wurde
+        if has_current_membership and person_id not in person_counted:
             gender_count[gender] += 1
+            person_counted.add(person_id)
     
     # Tab-Navigation
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -219,7 +248,12 @@ def main():
                 hide_index=True
             )
             
-            st.metric("Anzahl Einträge", len(filtered_df))
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Anzahl Einträge", len(filtered_df))
+            with col2:
+                unique_people = filtered_df['Name'].nunique()
+                st.metric("Einzigartige Personen", unique_people)
         else:
             st.info("Keine Personen für die aktuelle Wahlperiode gefunden.")
     
@@ -245,11 +279,14 @@ def main():
                     'Name': org_name,
                     'Typ': org_type,
                     'Klassifikation': classification,
-                    'Mitglieder': total_members
+                    'Mitglieder (gesamt)': total_members,
+                    'Männlich': org_gender_count[org_name]['Männlich'],
+                    'Weiblich': org_gender_count[org_name]['Weiblich'],
+                    'Divers': org_gender_count[org_name]['Divers']
                 })
             
             df_orgs = pd.DataFrame(org_list)
-            df_orgs = df_orgs.sort_values('Mitglieder', ascending=False)
+            df_orgs = df_orgs.sort_values('Mitglieder (gesamt)', ascending=False)
             
             st.dataframe(
                 df_orgs,
@@ -287,13 +324,16 @@ def main():
             st.plotly_chart(fig_pie, use_container_width=True)
             
             # Zahlen
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Männlich", gender_count['Männlich'])
             with col2:
                 st.metric("Weiblich", gender_count['Weiblich'])
             with col3:
                 st.metric("Divers", gender_count['Divers'])
+            with col4:
+                total = sum(gender_count.values())
+                st.metric("Gesamt", total)
         else:
             st.info("Keine Daten zur Geschlechterverteilung verfügbar.")
     
@@ -305,15 +345,17 @@ def main():
             # Daten für Balkendiagramm vorbereiten
             chart_data = []
             for org_name, counts in org_gender_count.items():
+                total = counts['Männlich'] + counts['Weiblich'] + counts['Divers']
                 chart_data.append({
                     'Ausschuss': org_name,
                     'Männlich': counts['Männlich'],
                     'Weiblich': counts['Weiblich'],
-                    'Divers': counts['Divers']
+                    'Divers': counts['Divers'],
+                    'Gesamt': total
                 })
             
             df_chart = pd.DataFrame(chart_data)
-            df_chart = df_chart.sort_values('Männlich', ascending=False)
+            df_chart = df_chart.sort_values('Gesamt', ascending=False)
             
             # Balkendiagramm
             fig_bar = go.Figure()
@@ -363,7 +405,7 @@ def main():
     
     # Footer
     st.markdown("---")
-    st.caption(f"Datenquelle: OParl-API Grevenbroich | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')}")
+    st.caption(f"Datenquelle: OParl-API Grevenbroich | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')} | Aktive Mitgliedschaften ab {(CUTOFF_DATE + pd.Timedelta(days=1)).strftime('%d.%m.%Y')}")
 
 if __name__ == "__main__":
     main()
