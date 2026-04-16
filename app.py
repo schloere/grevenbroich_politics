@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 from collections import defaultdict
 
+
 # Konfiguration für mobile Ansicht
 st.set_page_config(
     page_title="Grevenbroich Ratsinformationssystem",
