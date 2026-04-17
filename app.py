@@ -1,198 +1,337 @@
-import streamlit as st
-import requests
-import json
+import plotly.graph_objects as go
+from datetime import datetime
+from collections import defaultdict
+import time
 
-st.title("🔍 OParl Paginierungs-Debug")
+# Konfiguration für mobile Ansicht
+st.set_page_config(
+@@ -46,57 +45,27 @@
+CUTOFF_DATE = datetime(2026, 1, 31)
 
-BASE_URL = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people"
+@st.cache_data(ttl=3600)
+def fetch_all_pages_improved(base_url):
+    """
+    Holt alle Seiten einer OParl-Liste.
+    Verwendet sowohl 'next'-Links als auch manuelle Paginierung über ?page= Parameter.
+    """
+def fetch_all_pages(url):
+    """Holt alle Seiten einer OParl-Liste"""
+all_data = []
+    current_url = url
 
-st.header("Test 1: Erste Seite analysieren")
-
-if st.button("Erste Seite abrufen"):
+    # Erste Seite abrufen
     try:
-        response = requests.get(BASE_URL, timeout=10)
+        response = requests.get(base_url, timeout=10)
+        response.raise_for_status()
         data = response.json()
         
-        st.success(f"✅ Status Code: {response.status_code}")
+        if 'data' in data:
+            all_data.extend(data['data'])
         
-        st.subheader("Pagination-Info:")
+        # Paginierungs-Info auslesen
         pagination = data.get('pagination', {})
-        st.json(pagination)
+        total_pages = pagination.get('totalPages', 1)
         
-        st.subheader("Links:")
-        links = data.get('links', {})
-        st.json(links)
+        # Wenn es nur eine Seite gibt, sind wir fertig
+        if total_pages <= 1:
+            return all_data
         
-        st.subheader(f"Anzahl Personen auf dieser Seite:")
-        st.write(len(data.get('data', [])))
+        # Durch alle weiteren Seiten iterieren
+        for page_num in range(2, total_pages + 1):
+            try:
+                # URL mit page-Parameter konstruieren
+                separator = '&' if '?' in base_url else '?'
+                page_url = f"{base_url}{separator}page={page_num}"
+                
+                response = requests.get(page_url, timeout=10)
+                response.raise_for_status()
+                page_data = response.json()
+                
+                if 'data' in page_data:
+                    all_data.extend(page_data['data'])
+                
+                # Kurze Pause um Server nicht zu überlasten
+                time.sleep(0.1)
+                
+            except Exception as e:
+                st.warning(f"Fehler beim Abrufen von Seite {page_num}: {e}")
+                # Weiter versuchen trotz Fehler
+                continue
         
-        st.subheader("Erste 3 Personen (Namen):")
-        for person in data.get('data', [])[:3]:
-            st.write(f"- {person.get('name', 'Unbekannt')}")
-        
-        # In Session State speichern
-        st.session_state['first_page'] = data
+        return all_data
         
     except Exception as e:
-        st.error(f"❌ Fehler: {e}")
-
-st.header("Test 2: Manuelle Seiten testen")
-
-if 'first_page' in st.session_state:
-    pagination = st.session_state['first_page'].get('pagination', {})
-    total_pages = pagination.get('totalPages', 1)
-    
-    st.write(f"Laut API gibt es **{total_pages}** Seiten")
-    
-    page_to_test = st.number_input("Welche Seite testen?", min_value=1, max_value=max(total_pages, 10), value=2)
-    
-    if st.button(f"Seite {page_to_test} abrufen"):
-        # Teste verschiedene URL-Formate
-        test_urls = [
-            f"{BASE_URL}?page={page_to_test}",
-            f"{BASE_URL}/?page={page_to_test}",
-        ]
-        
-        for test_url in test_urls:
-            st.subheader(f"Teste: {test_url}")
-            try:
-                response = requests.get(test_url, timeout=10)
-                data = response.json()
-                
-                st.success(f"✅ Status: {response.status_code}")
-                st.write(f"Anzahl Personen: {len(data.get('data', []))}")
-                st.write(f"Current Page: {data.get('pagination', {}).get('currentPage')}")
-                
-                # Erste 3 Namen zeigen
-                for person in data.get('data', [])[:3]:
-                    st.write(f"- {person.get('name', 'Unbekannt')}")
-                
-                break  # Wenn erfolgreich, nicht weiter testen
-                
-            except Exception as e:
-                st.error(f"❌ Fehler: {e}")
-
-st.header("Test 3: 'next' Link folgen")
-
-if st.button("Alle Seiten via 'next' durchlaufen"):
-    all_people = []
-    current_url = BASE_URL
-    page_count = 0
-    
-    progress_bar = st.progress(0)
-    status = st.empty()
-    
-    while current_url and page_count < 100:  # Sicherheit: max 100 Seiten
-        page_count += 1
-        status.text(f"Lade Seite {page_count}...")
-        
+        st.error(f"Fehler beim ersten Abrufen von {base_url}: {e}")
+        return []
+    while current_url:
         try:
             response = requests.get(current_url, timeout=10)
+            response.raise_for_status()
             data = response.json()
             
-            all_people.extend(data.get('data', []))
+            if 'data' in data:
+                all_data.extend(data['data'])
             
-            # Nächste URL
-            next_url = data.get('links', {}).get('next')
-            
-            st.write(f"**Seite {page_count}:** {len(data.get('data', []))} Personen")
-            st.write(f"Next URL: {next_url if next_url else 'KEINE'}")
-            
-            if not next_url:
-                break
-                
-            current_url = next_url
-            progress_bar.progress(min(page_count / 10, 1.0))
-            
+            # Nächste Seite holen (gemäß OParl-Spezifikation)
+            current_url = data.get('links', {}).get('next')
         except Exception as e:
-            st.error(f"Fehler auf Seite {page_count}: {e}")
+            st.error(f"Fehler beim Abrufen von {current_url}: {e}")
             break
     
-    progress_bar.empty()
-    status.empty()
-    
-    st.success(f"✅ Insgesamt {len(all_people)} Personen von {page_count} Seiten geladen")
-    
-    # Einzigartige Namen zählen
-    unique_names = set(p.get('name', '') for p in all_people)
-    st.metric("Einzigartige Personen", len(unique_names))
+    return all_data
 
-st.header("Test 4: Alle Seiten manuell durchlaufen")
+@st.cache_data(ttl=3600)
+def fetch_single_object(url):
+@@ -106,6 +75,7 @@ def fetch_single_object(url):
+response.raise_for_status()
+return response.json()
+except Exception as e:
+        st.warning(f"Fehler beim Abrufen von {url}: {e}")
+return None
 
-if 'first_page' in st.session_state:
-    pagination = st.session_state['first_page'].get('pagination', {})
-    total_pages = pagination.get('totalPages', 1)
+def normalize_gender(gender):
+@@ -136,6 +106,7 @@ def is_in_current_period(membership):
+end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+
+# Mitgliedschaft ist nur aktiv, wenn sie nach dem Cutoff-Datum endet
+        # (d.h. endDate muss nach dem 31.01.2026 sein)
+return end_date > CUTOFF_DATE
+except:
+return False
+@@ -145,56 +116,31 @@ def main():
+st.subheader("Wahlperiode 2025-2030")
+
+# Info-Box zum Filter
+    with st.expander("ℹ️ Filter-Information & Bekannte Probleme"):
+    with st.expander("ℹ️ Filter-Information"):
+st.info(f"""
+       **Gefilterte Daten:**
+       - Wahlperiode beginnt: {WAHLPERIODE_START.strftime('%d.%m.%Y')}
+       - Ausgeschlossen: Mitgliedschaften mit Enddatum bis einschließlich {CUTOFF_DATE.strftime('%d.%m.%Y')}
+       - Angezeigt: Alle aktiven Mitgliedschaften (ohne Enddatum oder mit Enddatum nach {CUTOFF_DATE.strftime('%d.%m.%Y')})
+       """)
+        
+        st.warning("""
+        **⚠️ Bekannte Einschränkungen der OParl-API:**
+        
+        Die OParl-Schnittstelle von ITK Rheinland liefert möglicherweise nicht alle Daten aus:
+        - Einige Gremien aus dem Ratsinformationssystem fehlen in der OParl-API
+        - Dies ist ein Problem der Datensynchronisation beim Anbieter
+        - Die hier angezeigten Daten entsprechen dem aktuellen Stand der OParl-API
+        
+        Bei Unstimmigkeiten wenden Sie sich bitte an ITK Rheinland.
+        """)
+
+    with st.spinner("Lade Daten von der OParl-API (kann einige Sekunden dauern)..."):
+        # Progress-Anzeige
+        progress_text = st.empty()
+        
+        progress_text.text("📥 Lade Personen...")
+        people_data = fetch_all_pages_improved(PEOPLE_URL)
+        
+        progress_text.text("📥 Lade Organisationen/Gremien...")
+        organizations_data = fetch_all_pages_improved(ORG_URL)
+        
+        progress_text.empty()
+    with st.spinner("Lade Daten von der OParl-API..."):
+        # Daten laden
+        people_data = fetch_all_pages(PEOPLE_URL)
+        organizations_data = fetch_all_pages(ORG_URL)
+
+    if not people_data:
+        st.error("❌ Keine Personen-Daten konnten geladen werden. Bitte später erneut versuchen.")
+    if not people_data or not organizations_data:
+        st.error("Fehler beim Laden der Daten. Bitte später erneut versuchen.")
+return
+
+    if not organizations_data:
+        st.warning("⚠️ Keine Organisations-Daten konnten geladen werden.")
     
-    if st.button(f"Alle {total_pages} Seiten manuell abrufen"):
-        all_people = []
-        
-        progress_bar = st.progress(0)
-        status = st.empty()
-        
-        for page in range(1, total_pages + 1):
-            status.text(f"Lade Seite {page} von {total_pages}...")
+    # Statistik anzeigen
+    st.success(f"✅ {len(people_data)} Personen und {len(organizations_data)} Gremien von der OParl-API geladen")
+    
+# Organisationen in Dictionary für schnellen Zugriff
+org_dict = {org['id']: org for org in organizations_data}
+
+# Personen verarbeiten
+people_list = []
+gender_count = {"Männlich": 0, "Weiblich": 0, "Divers": 0}
+org_gender_count = defaultdict(lambda: {"Männlich": 0, "Weiblich": 0, "Divers": 0})
+    person_counted = set()
+    missing_orgs = set()  # Gremien die referenziert werden, aber nicht in org_dict sind
+    person_counted = set()  # Um Personen nur einmal zu zählen
+
+for person in people_data:
+gender = normalize_gender(person.get('gender', ''))
+@@ -225,14 +171,8 @@ def main():
+if not org_id:
+continue
+
+            # Prüfen ob Organisation in OParl vorhanden ist
+            if org_id not in org_dict:
+                missing_orgs.add(org_id)
+                org_name = f"⚠️ Gremium nicht in OParl (ID: {org_id.split('/')[-1]})"
+            else:
+                organization = org_dict[org_id]
+                org_name = organization.get('name', 'Unbekannt')
             
-            try:
-                url = f"{BASE_URL}?page={page}"
-                response = requests.get(url, timeout=10)
-                data = response.json()
-                
-                page_people = data.get('data', [])
-                all_people.extend(page_people)
-                
-                if page % 10 == 0 or page == total_pages:
-                    st.write(f"Seite {page}: {len(page_people)} Personen")
-                
-                progress_bar.progress(page / total_pages)
-                
-            except Exception as e:
-                st.error(f"Fehler auf Seite {page}: {e}")
-        
-        progress_bar.empty()
-        status.empty()
-        
-        st.success(f"✅ Insgesamt {len(all_people)} Personen von {total_pages} Seiten geladen")
-        
-        # Einzigartige Namen
-        unique_names = set(p.get('name', '') for p in all_people)
-        st.metric("Einzigartige Personen", len(unique_names))
-        
-        # Speichern
-        st.session_state['all_people_manual'] = all_people
+            organization = org_dict.get(org_id, {})
+            org_name = organization.get('name', 'Unbekannt')
+role = membership.get('role', '-')
+voting_right = "Ja" if membership.get('votingRight', False) else "Nein"
 
-st.header("Test 5: Vergleich")
+@@ -254,28 +194,17 @@ def main():
+org_gender_count[org_name][gender] += 1
 
-if 'all_people_manual' in st.session_state:
-    all_people = st.session_state['all_people_manual']
+# Gesamtstatistik nur wenn Person in aktueller Periode aktiv
+        # und noch nicht gezählt wurde
+if has_current_membership and person_id not in person_counted:
+gender_count[gender] += 1
+person_counted.add(person_id)
+
+    # Warnung bei fehlenden Gremien
+    if missing_orgs:
+        with st.expander(f"⚠️ {len(missing_orgs)} Gremium/Gremien werden referenziert, sind aber nicht in der OParl-API verfügbar"):
+            st.warning("""
+            Die folgenden Gremien werden in Mitgliedschaften referenziert, 
+            existieren aber nicht in der OParl-Gremien-Liste. 
+            Dies ist ein Datenproblem beim OParl-Anbieter (ITK Rheinland).
+            """)
+            for org_id in missing_orgs:
+                st.code(org_id)
     
-    st.subheader("Stichprobe: Namen auf verschiedenen Seiten")
-    
-    # Suche nach Stefan Meuser
-    search_name = st.text_input("Person suchen (z.B. 'Stefan Meuser'):", "Stefan Meuser")
-    
-    if search_name:
-        found = [p for p in all_people if search_name.lower() in p.get('name', '').lower()]
+# Tab-Navigation
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
+"👥 Personen", 
+"🏢 Ausschüsse", 
+"📊 Geschlechterverteilung",
+        "📈 Ausschuss-Analyse",
+        "🔍 Debug-Info"
+        "📈 Ausschuss-Analyse"
+])
+
+# Tab 1: Personenliste
+@@ -305,10 +234,6 @@ def main():
+if org_filter:
+filtered_df = filtered_df[filtered_df['Ausschuss'].isin(org_filter)]
+
+            # Sortierung
+            sort_by = st.selectbox("Sortieren nach:", ["Name", "Ausschuss", "Geschlecht"])
+            filtered_df = filtered_df.sort_values(sort_by)
+            
+st.dataframe(
+filtered_df,
+use_container_width=True,
+@@ -332,10 +257,8 @@ def main():
+active_orgs = [org for org in organizations_data 
+if org.get('name') in org_gender_count]
+
+        if active_orgs or missing_orgs:
+        if active_orgs:
+org_list = []
+            
+            # Existierende Gremien aus OParl
+for org in active_orgs:
+org_name = org.get('name', 'Unbekannt')
+org_type = org.get('organizationType', '-')
+@@ -348,28 +271,12 @@ def main():
+'Name': org_name,
+'Typ': org_type,
+'Klassifikation': classification,
+                    'Status': '✅ In OParl',
+'Mitglieder (gesamt)': total_members,
+'Männlich': org_gender_count[org_name]['Männlich'],
+'Weiblich': org_gender_count[org_name]['Weiblich'],
+'Divers': org_gender_count[org_name]['Divers']
+})
+
+            # Fehlende Gremien hinzufügen
+            for org_name in org_gender_count.keys():
+                if org_name.startswith('⚠️'):
+                    total_members = sum(org_gender_count[org_name].values())
+                    org_list.append({
+                        'Name': org_name,
+                        'Typ': 'Unbekannt',
+                        'Klassifikation': 'Unbekannt',
+                        'Status': '⚠️ Fehlt in OParl',
+                        'Mitglieder (gesamt)': total_members,
+                        'Männlich': org_gender_count[org_name]['Männlich'],
+                        'Weiblich': org_gender_count[org_name]['Weiblich'],
+                        'Divers': org_gender_count[org_name]['Divers']
+                    })
+            
+df_orgs = pd.DataFrame(org_list)
+df_orgs = df_orgs.sort_values('Mitglieder (gesamt)', ascending=False)
+
+@@ -379,11 +286,7 @@ def main():
+hide_index=True
+)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Ausschüsse in OParl", len(active_orgs))
+            with col2:
+                st.metric("Fehlende Gremien", len(missing_orgs))
+            st.metric("Anzahl Ausschüsse", len(df_orgs))
+else:
+st.info("Keine Ausschüsse gefunden.")
+
+@@ -423,20 +326,6 @@ def main():
+with col4:
+total = sum(gender_count.values())
+st.metric("Gesamt", total)
+                
+            # Prozentuale Verteilung
+            if total > 0:
+                st.subheader("Prozentuale Verteilung")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    pct = (gender_count['Männlich'] / total) * 100
+                    st.info(f"Männlich: {pct:.1f}%")
+                with col2:
+                    pct = (gender_count['Weiblich'] / total) * 100
+                    st.info(f"Weiblich: {pct:.1f}%")
+                with col3:
+                    pct = (gender_count['Divers'] / total) * 100
+                    st.info(f"Divers: {pct:.1f}%")
+else:
+st.info("Keine Daten zur Geschlechterverteilung verfügbar.")
+
+@@ -506,35 +395,9 @@ def main():
+else:
+st.info("Keine Daten für Ausschuss-Analyse verfügbar.")
+
+    # Tab 5: Debug-Info
+    with tab5:
+        st.header("Debug-Informationen")
         
-        if found:
-            st.success(f"✅ {len(found)} Person(en) gefunden:")
-            for person in found:
-                st.write(f"- {person.get('name', 'Unbekannt')}")
-                st.json(person)
-        else:
-            st.error(f"❌ '{search_name}' nicht gefunden!")
-    
-    # Export
-    st.subheader("Alle Namen exportieren")
-    if st.button("Namen als Liste anzeigen"):
-        names = sorted(set(p.get('name', 'Unbekannt') for p in all_people))
-        for i, name in enumerate(names, 1):
-            st.text(f"{i}. {name}")
+        st.subheader("API-Endpunkte")
+        st.code(f"Personen: {PEOPLE_URL}")
+        st.code(f"Gremien: {ORG_URL}")
         
-        # Download
-        names_text = "\n".join(names)
-        st.download_button(
-            "📥 Namen als Textdatei herunterladen",
-            names_text,
-            "personen_namen.txt",
-            "text/plain"
-        )
+        st.subheader("Geladene Daten")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Personen geladen", len(people_data))
+        with col2:
+            st.metric("Gremien geladen", len(organizations_data))
+        
+        if missing_orgs:
+            st.subheader("⚠️ Fehlende Gremien in OParl")
+            st.warning(f"{len(missing_orgs)} Gremien werden referenziert, sind aber nicht in der OParl-API vorhanden.")
+            
+            for org_id in missing_orgs:
+                st.text(org_id)
+        
+        st.subheader("Beispiel: Erste 5 Personen (Rohdaten)")
+        if people_data:
+            st.json(people_data[:5])
+    
+# Footer
+st.markdown("---")
+    st.caption(f"Datenquelle: OParl-API Grevenbroich (ITK Rheinland) | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')} | Stand: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    st.caption(f"Datenquelle: OParl-API Grevenbroich | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')} | Aktive Mitgliedschaften (kein Enddatum oder Enddatum nach {CUTOFF_DATE.strftime('%d.%m.%Y')})")
+
+if __name__ == "__main__":
+main()
