@@ -1,403 +1,198 @@
 import streamlit as st
-import pandas as pd
 import requests
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
-from collections import defaultdict
+import json
 
-# Konfiguration für mobile Ansicht
-st.set_page_config(
-    page_title="Grevenbroich Ratsinformationssystem",
-    page_icon="🏛️",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.title("🔍 OParl Paginierungs-Debug")
 
-# CSS für bessere mobile Darstellung
-st.markdown("""
-    <style>
-    .main {
-        padding: 1rem;
-    }
-    table {
-        font-size: 0.9rem;
-    }
-    @media (max-width: 768px) {
-        .main {
-            padding: 0.5rem;
-        }
-        table {
-            font-size: 0.8rem;
-        }
-    }
-    </style>
-""", unsafe_allow_html=True)
+BASE_URL = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013/people"
 
-# Basis-URLs
-BASE_URL = "http://ris-oparl.itk-rheinland.de/Oparl/bodies/0013"
-PEOPLE_URL = f"{BASE_URL}/people"
-ORG_URL = f"{BASE_URL}/organizations"
+st.header("Test 1: Erste Seite analysieren")
 
-# Wahlperiode definieren
-WAHLPERIODE_START = datetime(2025, 11, 1)
-# Stichtag: Mitgliedschaften die vor diesem Datum enden, werden ausgefiltert
-CUTOFF_DATE = datetime(2026, 1, 31)
+if st.button("Erste Seite abrufen"):
+    try:
+        response = requests.get(BASE_URL, timeout=10)
+        data = response.json()
+        
+        st.success(f"✅ Status Code: {response.status_code}")
+        
+        st.subheader("Pagination-Info:")
+        pagination = data.get('pagination', {})
+        st.json(pagination)
+        
+        st.subheader("Links:")
+        links = data.get('links', {})
+        st.json(links)
+        
+        st.subheader(f"Anzahl Personen auf dieser Seite:")
+        st.write(len(data.get('data', [])))
+        
+        st.subheader("Erste 3 Personen (Namen):")
+        for person in data.get('data', [])[:3]:
+            st.write(f"- {person.get('name', 'Unbekannt')}")
+        
+        # In Session State speichern
+        st.session_state['first_page'] = data
+        
+    except Exception as e:
+        st.error(f"❌ Fehler: {e}")
 
-@st.cache_data(ttl=3600)
-def fetch_all_pages(url):
-    """Holt alle Seiten einer OParl-Liste"""
-    all_data = []
-    current_url = url
+st.header("Test 2: Manuelle Seiten testen")
+
+if 'first_page' in st.session_state:
+    pagination = st.session_state['first_page'].get('pagination', {})
+    total_pages = pagination.get('totalPages', 1)
     
-    while current_url:
+    st.write(f"Laut API gibt es **{total_pages}** Seiten")
+    
+    page_to_test = st.number_input("Welche Seite testen?", min_value=1, max_value=max(total_pages, 10), value=2)
+    
+    if st.button(f"Seite {page_to_test} abrufen"):
+        # Teste verschiedene URL-Formate
+        test_urls = [
+            f"{BASE_URL}?page={page_to_test}",
+            f"{BASE_URL}/?page={page_to_test}",
+        ]
+        
+        for test_url in test_urls:
+            st.subheader(f"Teste: {test_url}")
+            try:
+                response = requests.get(test_url, timeout=10)
+                data = response.json()
+                
+                st.success(f"✅ Status: {response.status_code}")
+                st.write(f"Anzahl Personen: {len(data.get('data', []))}")
+                st.write(f"Current Page: {data.get('pagination', {}).get('currentPage')}")
+                
+                # Erste 3 Namen zeigen
+                for person in data.get('data', [])[:3]:
+                    st.write(f"- {person.get('name', 'Unbekannt')}")
+                
+                break  # Wenn erfolgreich, nicht weiter testen
+                
+            except Exception as e:
+                st.error(f"❌ Fehler: {e}")
+
+st.header("Test 3: 'next' Link folgen")
+
+if st.button("Alle Seiten via 'next' durchlaufen"):
+    all_people = []
+    current_url = BASE_URL
+    page_count = 0
+    
+    progress_bar = st.progress(0)
+    status = st.empty()
+    
+    while current_url and page_count < 100:  # Sicherheit: max 100 Seiten
+        page_count += 1
+        status.text(f"Lade Seite {page_count}...")
+        
         try:
             response = requests.get(current_url, timeout=10)
-            response.raise_for_status()
             data = response.json()
             
-            if 'data' in data:
-                all_data.extend(data['data'])
+            all_people.extend(data.get('data', []))
             
-            # Nächste Seite holen (gemäß OParl-Spezifikation)
-            current_url = data.get('links', {}).get('next')
+            # Nächste URL
+            next_url = data.get('links', {}).get('next')
+            
+            st.write(f"**Seite {page_count}:** {len(data.get('data', []))} Personen")
+            st.write(f"Next URL: {next_url if next_url else 'KEINE'}")
+            
+            if not next_url:
+                break
+                
+            current_url = next_url
+            progress_bar.progress(min(page_count / 10, 1.0))
+            
         except Exception as e:
-            st.error(f"Fehler beim Abrufen von {current_url}: {e}")
+            st.error(f"Fehler auf Seite {page_count}: {e}")
             break
     
-    return all_data
+    progress_bar.empty()
+    status.empty()
+    
+    st.success(f"✅ Insgesamt {len(all_people)} Personen von {page_count} Seiten geladen")
+    
+    # Einzigartige Namen zählen
+    unique_names = set(p.get('name', '') for p in all_people)
+    st.metric("Einzigartige Personen", len(unique_names))
 
-@st.cache_data(ttl=3600)
-def fetch_single_object(url):
-    """Holt ein einzelnes Objekt"""
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.warning(f"Fehler beim Abrufen von {url}: {e}")
-        return None
+st.header("Test 4: Alle Seiten manuell durchlaufen")
 
-def normalize_gender(gender):
-    """Normalisiert Geschlechtsangaben"""
-    if not gender or gender == "":
-        return "Divers"
-    elif gender.lower() in ["männlich", "male", "m"]:
-        return "Männlich"
-    elif gender.lower() in ["weiblich", "female", "w", "f"]:
-        return "Weiblich"
-    else:
-        return "Divers"
-
-def is_in_current_period(membership):
-    """
-    Prüft ob Mitgliedschaft aktuell aktiv ist (nach dem 31.01.2026).
-    Eine Mitgliedschaft ist aktiv wenn:
-    1. Sie kein endDate hat (=aktuell aktiv)
-    2. Sie ein endDate nach dem 31.01.2026 hat (=noch nicht beendet)
-    """
-    end_date_str = membership.get('endDate')
+if 'first_page' in st.session_state:
+    pagination = st.session_state['first_page'].get('pagination', {})
+    total_pages = pagination.get('totalPages', 1)
     
-    # Kein Enddatum = Mitgliedschaft ist aktiv
-    if not end_date_str:
-        return True
-    
-    try:
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+    if st.button(f"Alle {total_pages} Seiten manuell abrufen"):
+        all_people = []
         
-        # Mitgliedschaft ist nur aktiv, wenn sie nach dem Cutoff-Datum endet
-        # (d.h. endDate muss nach dem 31.01.2026 sein)
-        return end_date > CUTOFF_DATE
-    except:
-        return False
-
-def main():
-    st.title("🏛️ Ratsinformationssystem Grevenbroich")
-    st.subheader("Wahlperiode 2025-2030")
-    
-    # Info-Box zum Filter
-    with st.expander("ℹ️ Filter-Information"):
-        st.info(f"""
-        **Gefilterte Daten:**
-        - Wahlperiode beginnt: {WAHLPERIODE_START.strftime('%d.%m.%Y')}
-        - Ausgeschlossen: Mitgliedschaften mit Enddatum bis einschließlich {CUTOFF_DATE.strftime('%d.%m.%Y')}
-        - Angezeigt: Alle aktiven Mitgliedschaften (ohne Enddatum oder mit Enddatum nach {CUTOFF_DATE.strftime('%d.%m.%Y')})
-        """)
-    
-    with st.spinner("Lade Daten von der OParl-API..."):
-        # Daten laden
-        people_data = fetch_all_pages(PEOPLE_URL)
-        organizations_data = fetch_all_pages(ORG_URL)
-    
-    if not people_data or not organizations_data:
-        st.error("Fehler beim Laden der Daten. Bitte später erneut versuchen.")
-        return
-    
-    # Organisationen in Dictionary für schnellen Zugriff
-    org_dict = {org['id']: org for org in organizations_data}
-    
-    # Personen verarbeiten
-    people_list = []
-    gender_count = {"Männlich": 0, "Weiblich": 0, "Divers": 0}
-    org_gender_count = defaultdict(lambda: {"Männlich": 0, "Weiblich": 0, "Divers": 0})
-    person_counted = set()  # Um Personen nur einmal zu zählen
-    
-    for person in people_data:
-        gender = normalize_gender(person.get('gender', ''))
-        person_name = person.get('name', 'Unbekannt')
-        person_id = person.get('id', '')
+        progress_bar = st.progress(0)
+        status = st.empty()
         
-        # Mitgliedschaften verarbeiten
-        memberships = person.get('membership', [])
-        has_current_membership = False
-        
-        for membership_ref in memberships:
-            # Mitgliedschaft-Objekt abrufen
-            if isinstance(membership_ref, str):
-                membership = fetch_single_object(membership_ref)
-            else:
-                membership = membership_ref
+        for page in range(1, total_pages + 1):
+            status.text(f"Lade Seite {page} von {total_pages}...")
             
-            if not membership:
-                continue
-            
-            # Prüfen ob Mitgliedschaft aktuell aktiv ist
-            if not is_in_current_period(membership):
-                continue
-            
-            has_current_membership = True
-            
-            org_id = membership.get('organization')
-            if not org_id:
-                continue
-            
-            organization = org_dict.get(org_id, {})
-            org_name = organization.get('name', 'Unbekannt')
-            role = membership.get('role', '-')
-            voting_right = "Ja" if membership.get('votingRight', False) else "Nein"
-            
-            # Start- und Enddatum für Anzeige
-            start_date = membership.get('startDate', '-')
-            end_date = membership.get('endDate', 'Aktiv')
-            
-            people_list.append({
-                'Name': person_name,
-                'Geschlecht': gender,
-                'Ausschuss': org_name,
-                'Rolle': role,
-                'Stimmrecht': voting_right,
-                'Von': start_date,
-                'Bis': end_date
-            })
-            
-            # Statistik aktualisieren
-            org_gender_count[org_name][gender] += 1
-        
-        # Gesamtstatistik nur wenn Person in aktueller Periode aktiv
-        # und noch nicht gezählt wurde
-        if has_current_membership and person_id not in person_counted:
-            gender_count[gender] += 1
-            person_counted.add(person_id)
-    
-    # Tab-Navigation
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "👥 Personen", 
-        "🏢 Ausschüsse", 
-        "📊 Geschlechterverteilung",
-        "📈 Ausschuss-Analyse"
-    ])
-    
-    # Tab 1: Personenliste
-    with tab1:
-        st.header("Personen im Rat")
-        
-        if people_list:
-            df_people = pd.DataFrame(people_list)
-            
-            # Filter-Optionen
-            col1, col2 = st.columns(2)
-            with col1:
-                gender_filter = st.multiselect(
-                    "Geschlecht filtern:",
-                    options=["Männlich", "Weiblich", "Divers"],
-                    default=["Männlich", "Weiblich", "Divers"]
-                )
-            with col2:
-                org_filter = st.multiselect(
-                    "Ausschuss filtern:",
-                    options=sorted(df_people['Ausschuss'].unique()),
-                    default=[]
-                )
-            
-            # Filter anwenden
-            filtered_df = df_people[df_people['Geschlecht'].isin(gender_filter)]
-            if org_filter:
-                filtered_df = filtered_df[filtered_df['Ausschuss'].isin(org_filter)]
-            
-            st.dataframe(
-                filtered_df,
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Anzahl Einträge", len(filtered_df))
-            with col2:
-                unique_people = filtered_df['Name'].nunique()
-                st.metric("Einzigartige Personen", unique_people)
-        else:
-            st.info("Keine Personen für die aktuelle Wahlperiode gefunden.")
-    
-    # Tab 2: Ausschussliste
-    with tab2:
-        st.header("Ausschüsse")
-        
-        # Ausschüsse filtern (nur die mit Mitgliedern in aktueller Periode)
-        active_orgs = [org for org in organizations_data 
-                      if org.get('name') in org_gender_count]
-        
-        if active_orgs:
-            org_list = []
-            for org in active_orgs:
-                org_name = org.get('name', 'Unbekannt')
-                org_type = org.get('organizationType', '-')
-                classification = org.get('classification', '-')
+            try:
+                url = f"{BASE_URL}?page={page}"
+                response = requests.get(url, timeout=10)
+                data = response.json()
                 
-                # Mitgliederanzahl aus Statistik
-                total_members = sum(org_gender_count[org_name].values())
+                page_people = data.get('data', [])
+                all_people.extend(page_people)
                 
-                org_list.append({
-                    'Name': org_name,
-                    'Typ': org_type,
-                    'Klassifikation': classification,
-                    'Mitglieder (gesamt)': total_members,
-                    'Männlich': org_gender_count[org_name]['Männlich'],
-                    'Weiblich': org_gender_count[org_name]['Weiblich'],
-                    'Divers': org_gender_count[org_name]['Divers']
-                })
-            
-            df_orgs = pd.DataFrame(org_list)
-            df_orgs = df_orgs.sort_values('Mitglieder (gesamt)', ascending=False)
-            
-            st.dataframe(
-                df_orgs,
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            st.metric("Anzahl Ausschüsse", len(df_orgs))
-        else:
-            st.info("Keine Ausschüsse gefunden.")
-    
-    # Tab 3: Geschlechterverteilung (Kreisdiagramm)
-    with tab3:
-        st.header("Geschlechterverteilung gesamt")
+                if page % 10 == 0 or page == total_pages:
+                    st.write(f"Seite {page}: {len(page_people)} Personen")
+                
+                progress_bar.progress(page / total_pages)
+                
+            except Exception as e:
+                st.error(f"Fehler auf Seite {page}: {e}")
         
-        if any(gender_count.values()):
-            # Kreisdiagramm
-            fig_pie = px.pie(
-                values=list(gender_count.values()),
-                names=list(gender_count.keys()),
-                title="Verteilung nach Geschlecht",
-                color_discrete_map={
-                    'Männlich': '#3498db',
-                    'Weiblich': '#e74c3c',
-                    'Divers': '#95a5a6'
-                }
-            )
-            
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie.update_layout(
-                height=400,
-                margin=dict(t=50, b=20, l=20, r=20)
-            )
-            
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
-            # Zahlen
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Männlich", gender_count['Männlich'])
-            with col2:
-                st.metric("Weiblich", gender_count['Weiblich'])
-            with col3:
-                st.metric("Divers", gender_count['Divers'])
-            with col4:
-                total = sum(gender_count.values())
-                st.metric("Gesamt", total)
-        else:
-            st.info("Keine Daten zur Geschlechterverteilung verfügbar.")
-    
-    # Tab 4: Ausschuss-Analyse (Balkendiagramm)
-    with tab4:
-        st.header("Geschlechterverteilung nach Ausschuss")
+        progress_bar.empty()
+        status.empty()
         
-        if org_gender_count:
-            # Daten für Balkendiagramm vorbereiten
-            chart_data = []
-            for org_name, counts in org_gender_count.items():
-                total = counts['Männlich'] + counts['Weiblich'] + counts['Divers']
-                chart_data.append({
-                    'Ausschuss': org_name,
-                    'Männlich': counts['Männlich'],
-                    'Weiblich': counts['Weiblich'],
-                    'Divers': counts['Divers'],
-                    'Gesamt': total
-                })
-            
-            df_chart = pd.DataFrame(chart_data)
-            df_chart = df_chart.sort_values('Gesamt', ascending=False)
-            
-            # Balkendiagramm
-            fig_bar = go.Figure()
-            
-            fig_bar.add_trace(go.Bar(
-                name='Männlich',
-                x=df_chart['Ausschuss'],
-                y=df_chart['Männlich'],
-                marker_color='#3498db'
-            ))
-            
-            fig_bar.add_trace(go.Bar(
-                name='Weiblich',
-                x=df_chart['Ausschuss'],
-                y=df_chart['Weiblich'],
-                marker_color='#e74c3c'
-            ))
-            
-            fig_bar.add_trace(go.Bar(
-                name='Divers',
-                x=df_chart['Ausschuss'],
-                y=df_chart['Divers'],
-                marker_color='#95a5a6'
-            ))
-            
-            fig_bar.update_layout(
-                title='Geschlechterverteilung pro Ausschuss',
-                xaxis_title='Ausschuss',
-                yaxis_title='Anzahl Personen',
-                barmode='group',
-                height=500,
-                xaxis_tickangle=-45,
-                margin=dict(b=150)
-            )
-            
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-            # Detailtabelle
-            st.subheader("Detaillierte Aufschlüsselung")
-            st.dataframe(
-                df_chart,
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Keine Daten für Ausschuss-Analyse verfügbar.")
-    
-    # Footer
-    st.markdown("---")
-    st.caption(f"Datenquelle: OParl-API Grevenbroich | Wahlperiode ab {WAHLPERIODE_START.strftime('%d.%m.%Y')} | Aktive Mitgliedschaften (kein Enddatum oder Enddatum nach {CUTOFF_DATE.strftime('%d.%m.%Y')})")
+        st.success(f"✅ Insgesamt {len(all_people)} Personen von {total_pages} Seiten geladen")
+        
+        # Einzigartige Namen
+        unique_names = set(p.get('name', '') for p in all_people)
+        st.metric("Einzigartige Personen", len(unique_names))
+        
+        # Speichern
+        st.session_state['all_people_manual'] = all_people
 
-if __name__ == "__main__":
-    main()
+st.header("Test 5: Vergleich")
+
+if 'all_people_manual' in st.session_state:
+    all_people = st.session_state['all_people_manual']
+    
+    st.subheader("Stichprobe: Namen auf verschiedenen Seiten")
+    
+    # Suche nach Stefan Meuser
+    search_name = st.text_input("Person suchen (z.B. 'Stefan Meuser'):", "Stefan Meuser")
+    
+    if search_name:
+        found = [p for p in all_people if search_name.lower() in p.get('name', '').lower()]
+        
+        if found:
+            st.success(f"✅ {len(found)} Person(en) gefunden:")
+            for person in found:
+                st.write(f"- {person.get('name', 'Unbekannt')}")
+                st.json(person)
+        else:
+            st.error(f"❌ '{search_name}' nicht gefunden!")
+    
+    # Export
+    st.subheader("Alle Namen exportieren")
+    if st.button("Namen als Liste anzeigen"):
+        names = sorted(set(p.get('name', 'Unbekannt') for p in all_people))
+        for i, name in enumerate(names, 1):
+            st.text(f"{i}. {name}")
+        
+        # Download
+        names_text = "\n".join(names)
+        st.download_button(
+            "📥 Namen als Textdatei herunterladen",
+            names_text,
+            "personen_namen.txt",
+            "text/plain"
+        )
